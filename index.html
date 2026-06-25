@@ -345,7 +345,7 @@
       <span class="badge">AI Search Project · n-Puzzle</span>
       <h1>N-Puzzle Search Agent</h1>
       <p class="subtitle">
-        Website minh họa quá trình giải n-Puzzle bằng BFS, DFS, Greedy Best-First Search và A*.
+        Website minh họa quá trình giải n-Puzzle bằng BFS, DFS, Greedy Best-First Search, A* và IDA*.
         Người dùng có thể nhập trạng thái ban đầu, sinh trạng thái ngẫu nhiên, chạy thuật toán và xem từng bước di chuyển.
       </p>
     </header>
@@ -371,6 +371,7 @@
                   <option>BFS</option>
                   <option>DFS</option>
                   <option selected>A*</option>
+                  <option>IDA*</option>
                   <option>Greedy</option>
                 </select>
               </div>
@@ -382,6 +383,7 @@
                 <select id="heuristic">
                   <option selected>Manhattan</option>
                   <option>Misplaced Tiles</option>
+                  <option>Linear Conflict</option>
                 </select>
               </div>
               <div>
@@ -393,7 +395,7 @@
             <div class="two-cols">
               <div>
                 <label for="maxExpansions">Max expansions</label>
-                <input id="maxExpansions" type="number" min="1" value="100000" />
+                <input id="maxExpansions" type="number" min="1" value="1000000" />
               </div>
               <div>
                 <label for="randomMoves">Random moves</label>
@@ -458,7 +460,7 @@
     </main>
 
     <footer>
-      Ghi chú: BFS/DFS trên 4×4 có thể rất chậm vì không gian trạng thái lớn. Khi demo 4×4 nên dùng A* hoặc Greedy với số bước random vừa phải.
+      Ghi chú: BFS/DFS trên 4×4 gần như không phù hợp vì không gian trạng thái rất lớn. Khi demo 4×4 nên dùng IDA* hoặc A* với heuristic Linear Conflict và số bước random vừa phải.
     </footer>
   </div>
 
@@ -607,8 +609,78 @@
       return distance;
     }
 
+    function maxNonOverlappingConflicts(pairs) {
+      let best = 0;
+      function backtrack(index, used, count) {
+        if (index >= pairs.length) {
+          if (count > best) best = count;
+          return;
+        }
+        backtrack(index + 1, used, count);
+        const [a, b] = pairs[index];
+        if (!used.has(a) && !used.has(b)) {
+          const nextUsed = new Set(used);
+          nextUsed.add(a);
+          nextUsed.add(b);
+          backtrack(index + 1, nextUsed, count + 1);
+        }
+      }
+      backtrack(0, new Set(), 0);
+      return best;
+    }
+
+    function linearConflict(state, n) {
+      let conflicts = 0;
+
+      for (let row = 0; row < n; row++) {
+        const rowTiles = [];
+        for (let col = 0; col < n; col++) {
+          const index = row * n + col;
+          const value = state[index];
+          if (value === 0) continue;
+          const goalIndex = value - 1;
+          const goalRow = Math.floor(goalIndex / n);
+          const goalCol = goalIndex % n;
+          if (goalRow === row) rowTiles.push([index, goalCol]);
+        }
+
+        const pairs = [];
+        for (let i = 0; i < rowTiles.length; i++) {
+          for (let j = i + 1; j < rowTiles.length; j++) {
+            if (rowTiles[i][1] > rowTiles[j][1]) pairs.push([rowTiles[i][0], rowTiles[j][0]]);
+          }
+        }
+        conflicts += maxNonOverlappingConflicts(pairs);
+      }
+
+      for (let col = 0; col < n; col++) {
+        const colTiles = [];
+        for (let row = 0; row < n; row++) {
+          const index = row * n + col;
+          const value = state[index];
+          if (value === 0) continue;
+          const goalIndex = value - 1;
+          const goalRow = Math.floor(goalIndex / n);
+          const goalCol = goalIndex % n;
+          if (goalCol === col) colTiles.push([index, goalRow]);
+        }
+
+        const pairs = [];
+        for (let i = 0; i < colTiles.length; i++) {
+          for (let j = i + 1; j < colTiles.length; j++) {
+            if (colTiles[i][1] > colTiles[j][1]) pairs.push([colTiles[i][0], colTiles[j][0]]);
+          }
+        }
+        conflicts += maxNonOverlappingConflicts(pairs);
+      }
+
+      return manhattanDistance(state, n) + 2 * conflicts;
+    }
+
     function heuristicFn(name) {
-      return name === "Misplaced Tiles" ? misplacedTiles : manhattanDistance;
+      if (name === "Misplaced Tiles") return misplacedTiles;
+      if (name === "Linear Conflict") return linearConflict;
+      return manhattanDistance;
     }
 
     function reconstructPath(parent, endKey) {
@@ -759,8 +831,8 @@
       const goalKey = key(goalState(n));
       const startKey = key(startState);
       let counter = 0;
-      const heap = new MinHeap((a, b) => a.f - b.f || a.g - b.g || a.order - b.order);
-      heap.push({ f: h(startState, n), g: 0, order: counter++, state: startState });
+      const heap = new MinHeap((a, b) => a.f - b.f || a.h - b.h || b.g - a.g || a.order - b.order);
+      heap.push({ f: h(startState, n), h: h(startState, n), g: 0, order: counter++, state: startState });
       const parent = new Map([[startKey, { prev: null, action: null, state: startState }]]);
       const gScore = new Map([[startKey, 0]]);
       const closed = new Set();
@@ -786,7 +858,8 @@
           if (!gScore.has(nKey) || tentativeG < gScore.get(nKey)) {
             gScore.set(nKey, tentativeG);
             parent.set(nKey, { prev: sKey, action, state: nextState });
-            heap.push({ f: tentativeG + h(nextState, n), g: tentativeG, order: counter++, state: nextState });
+            const hValue = h(nextState, n);
+            heap.push({ f: tentativeG + hValue, h: hValue, g: tentativeG, order: counter++, state: nextState });
           }
         }
         maxFrontier = Math.max(maxFrontier, heap.length);
@@ -830,6 +903,71 @@
       return makeResult(`Greedy (${heuristicName})`, false, [], [], expanded, parent.size, maxFrontier, "Không tìm thấy lời giải trong giới hạn mở rộng.");
     }
 
+    function idaStarSearch(startState, n, heuristicName, maxExpansions) {
+      const h = heuristicFn(heuristicName);
+      const goalKey = key(goalState(n));
+      let bound = h(startState, n);
+      const pathStates = [startState];
+      const pathActions = [];
+      const pathKeys = new Set([key(startState)]);
+      let expanded = 0;
+      let generated = 1;
+      let maxFrontier = 1;
+
+      function search(state, g, bound, previousAction = null) {
+        const f = g + h(state, n);
+        if (f > bound) return { type: "next", value: f };
+        if (expanded >= maxExpansions) return { type: "limit" };
+
+        expanded++;
+        const sKey = key(state);
+        if (sKey === goalKey) return { type: "found" };
+
+        let minNext = Infinity;
+        let neighbors = getNeighbors(state, n);
+        if (previousAction !== null) {
+          neighbors = neighbors.filter(([action]) => action !== REVERSE_ACTION[previousAction]);
+        }
+        neighbors.sort((a, b) => h(a[1], n) - h(b[1], n));
+
+        for (const [action, nextState] of neighbors) {
+          const nKey = key(nextState);
+          if (pathKeys.has(nKey)) continue;
+
+          generated++;
+          pathStates.push(nextState);
+          pathActions.push(action);
+          pathKeys.add(nKey);
+          maxFrontier = Math.max(maxFrontier, pathStates.length);
+
+          const result = search(nextState, g + 1, bound, action);
+          if (result.type === "found") return result;
+          if (result.type === "limit") return result;
+          if (result.value < minNext) minNext = result.value;
+
+          pathKeys.delete(nKey);
+          pathStates.pop();
+          pathActions.pop();
+        }
+
+        return { type: "next", value: minNext };
+      }
+
+      while (true) {
+        const result = search(startState, 0, bound);
+        if (result.type === "found") {
+          return makeResult(`IDA* (${heuristicName})`, true, pathStates.slice(), pathActions.slice(), expanded, generated, maxFrontier);
+        }
+        if (result.type === "limit") {
+          return makeResult(`IDA* (${heuristicName})`, false, [], [], expanded, generated, maxFrontier, "IDA* dừng vì đạt giới hạn max expansions.");
+        }
+        if (!Number.isFinite(result.value)) {
+          return makeResult(`IDA* (${heuristicName})`, false, [], [], expanded, generated, maxFrontier, "Không tìm thấy lời giải.");
+        }
+        bound = result.value;
+      }
+    }
+
     function solveAlgorithm(algorithm, startState, n, heuristicName, depthLimit, maxExpansions) {
       if (!isSolvable(startState, n)) {
         return makeResult(algorithm, false, [], [], 0, 0, 0, "Trạng thái này không thể giải được theo quy tắc inversion.");
@@ -837,6 +975,7 @@
       if (algorithm === "BFS") return bfsSearch(startState, n, maxExpansions);
       if (algorithm === "DFS") return dfsSearch(startState, n, depthLimit, maxExpansions);
       if (algorithm === "A*") return astarSearch(startState, n, heuristicName, maxExpansions);
+      if (algorithm === "IDA*") return idaStarSearch(startState, n, heuristicName, maxExpansions);
       if (algorithm === "Greedy") return greedySearch(startState, n, heuristicName, maxExpansions);
       throw new Error("Thuật toán không hợp lệ.");
     }
@@ -941,8 +1080,11 @@
         el.randomMoves.value = Math.min(Number(el.randomMoves.value), 30);
       } else {
         el.stateInput.value = stateToText(goalState(4), 4);
-        el.randomMoves.value = Math.max(Math.min(Number(el.randomMoves.value), 40), 10);
-        showMessage("Với 4×4, nên dùng A* hoặc Greedy. BFS/DFS có thể rất chậm.", "warn");
+        el.algorithm.value = "IDA*";
+        el.heuristic.value = "Linear Conflict";
+        el.maxExpansions.value = Math.max(Number(el.maxExpansions.value) || 0, 1000000);
+        el.randomMoves.value = Math.max(Math.min(Number(el.randomMoves.value), 30), 10);
+        showMessage("Với 4×4, nên dùng IDA* hoặc A* + Linear Conflict. BFS/DFS rất chậm.", "warn");
       }
       renderStep();
     });
@@ -982,7 +1124,9 @@
       try {
         const state = parseState(el.stateInput.value, n);
         if (n === 4 && (algorithm === "BFS" || algorithm === "DFS")) {
-          showMessage("Cảnh báo: 4×4 với BFS/DFS có thể rất chậm. Đang chạy theo giới hạn max expansions.", "warn");
+          showMessage("Cảnh báo: 4×4 với BFS/DFS gần như không phù hợp. Nên dùng IDA* hoặc A* + Linear Conflict.", "warn");
+        } else if (n === 4 && algorithm === "A*" && heuristic !== "Linear Conflict") {
+          showMessage("Đang chạy A*. Gợi ý: với 4×4 nên chọn Linear Conflict để chạy nhanh hơn.", "warn");
         } else {
           showMessage("Đang chạy thuật toán...", "warn");
         }
